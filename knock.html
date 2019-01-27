@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+    <title>Knock</title>
+
+    <script src="ammo.js"></script>
+    <script src="babylon.js"></script>
+    <script src="dat.gui.min.js"></script>
+    <script src="babylon.woodProceduralTexture.min.js"></script>
+    <script src="babylon.marbleProceduralTexture.min.js"></script>
+    <script src="babylon.cloudProceduralTexture.min.js"></script>
+    <script src="babylon.roadProceduralTexture.min.js"></script>
+
+    <style>
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+<canvas id="renderCanvas"></canvas>
+<script>
+    const gui = new dat.GUI();
+    let opts = {gravity: 0, buildingHeight: 50};
+    gui.add(opts, 'gravity', 0, 20).onChange(v => {
+        scene.getPhysicsEngine().setGravity(new BABYLON.Vector3(0, -v, 0));
+    });
+    gui.add(opts, 'buildingHeight', 1, 400).name('Building Height');
+    gui.add({rebuild}, 'rebuild');
+
+    var canvas = document.getElementById("renderCanvas");
+
+    var engine = new BABYLON.Engine(canvas, true);
+
+    var scene = new BABYLON.Scene(engine);
+    scene.collisionsEnabled = true;
+    scene.enablePhysics(new BABYLON.Vector3(0, -opts.gravity, 0), new BABYLON.AmmoJSPlugin());
+
+    var woodMaterial = new BABYLON.StandardMaterial('woodMaterial', scene);
+    var woodTexture = new BABYLON.WoodProceduralTexture('woodTexture', 256, scene);
+    woodTexture.ampScale = 40;
+    woodMaterial.diffuseTexture = woodTexture;
+
+    var marbleMaterial = new BABYLON.StandardMaterial('marbleMaterial', scene);
+    var marbleTexture = new BABYLON.MarbleProceduralTexture('marbleTexture', 1024, scene);
+    marbleTexture.numberOfBricksHeight = 5;
+    marbleTexture.numberOfBricksWidth = 5;
+    marbleMaterial.ambientTexture = marbleTexture;
+
+    var cloudMaterial = new BABYLON.StandardMaterial('cloudMaterial', scene);
+    var cloudTexture = new BABYLON.CloudProceduralTexture('cloudTexture', 1024, scene);
+    cloudTexture.coordinatesMode = BABYLON.Texture.SKYBOX_MODE;
+    cloudMaterial.emissiveTexture = cloudTexture;
+    cloudMaterial.backFaceCulling = false;
+
+    var roadMaterial = new BABYLON.StandardMaterial('roadMaterial', scene);
+    var roadTexture = new BABYLON.RoadProceduralTexture('roadTexture', 512, scene);
+    roadMaterial.diffuseTexture = roadTexture;
+
+    const cannonSound = new BABYLON.Sound('cannonSound', 'cannon.wav', scene);
+    const hitSound = new BABYLON.Sound('hitSound', 'hit.mp3', scene);
+    hitSound.setVolume(0.5);
+
+    var camera = new BABYLON.ArcRotateCamera('camera', 5, Math.PI / 4, 150, BABYLON.Vector3.Zero(), scene);
+    camera.attachControl(canvas, true);
+
+    var light = new BABYLON.PointLight('light', new BABYLON.Vector3(-200, 200, -200), scene);
+
+    let tmpObjects = [];
+
+    scene.onPointerObservable.add(e => {
+        if (e.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+            var sphere = BABYLON.Mesh.CreateSphere('sphere', 16, 2, scene);
+            sphere.position = e.pickInfo.ray.origin;
+            sphere.material = roadMaterial;
+            sphere.physicsImpostor = new BABYLON.PhysicsImpostor(sphere, BABYLON.PhysicsImpostor.SphereImpostor, {
+                mass: 5,
+                restitution: 0.8
+            }, scene);
+            sphere.physicsImpostor.setLinearVelocity(e.pickInfo.ray.direction.scale(100));
+            let collidables = tmpObjects.filter(a => a !== sphere).map(a => a.physicsImpostor);
+            let collideHandler = () => {
+                sphere.physicsImpostor.unregisterOnPhysicsCollide(collidables, collideHandler);
+                if (hitSound.isReady()) {
+                    hitSound.play();
+                }
+            };
+            sphere.physicsImpostor.registerOnPhysicsCollide(collidables, collideHandler);
+            tmpObjects.push(sphere);
+            if (cannonSound.isReady()) {
+                cannonSound.play();
+            }
+        }
+    });
+
+    var ground = BABYLON.MeshBuilder.CreateBox('ground', {height: 5, width: 100, depth: 100}, scene);
+    ground.position = new BABYLON.Vector3(0, -2.5, 0);
+    ground.material = marbleMaterial;
+    ground.physicsImpostor = new BABYLON.PhysicsImpostor(ground, BABYLON.PhysicsImpostor.BoxImpostor, {
+        mass: 0,
+        restitution: 0.15
+    }, scene);
+    ground.receiveShadows = true;
+
+    var clouds = BABYLON.MeshBuilder.CreateSphere('clouds', {diameter: 10000}, scene);
+    clouds.material = cloudMaterial;
+
+    function rebuild() {
+        for (let obj of tmpObjects) {
+            obj.dispose();
+        }
+        tmpObjects.length = 0;
+        for (let a = 0; a < opts.buildingHeight; a++) {
+            let even = a % 2 === 0;
+            for (let b = 0; b < 3; b++) {
+                let piece = new BABYLON.MeshBuilder.CreateBox('piece' + a + ',' + b, {width: even ? 1.5 : 5, height: 1, depth: even ? 5 : 1.5}, scene);
+                piece.position = new BABYLON.Vector3(even ? b * 5 / 3 - 1.5 : 0, a + 0.5, even ? 0 : b * 5 / 3 - 1.5);
+                piece.material = woodMaterial;
+                piece.physicsImpostor = new BABYLON.PhysicsImpostor(piece, BABYLON.PhysicsImpostor.BoxImpostor, {
+                    mass: 1,
+                    restitution: 0.3
+                }, scene);
+                tmpObjects.push(piece);
+            }
+        }
+    }
+    rebuild();
+
+    engine.runRenderLoop(function () {
+        if (scene) {
+            scene.render();
+        }
+    });
+
+    window.addEventListener("resize", function () {
+        engine.resize();
+    });
+</script>
+</body>
+</html>
